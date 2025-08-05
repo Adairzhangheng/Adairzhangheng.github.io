@@ -101,10 +101,19 @@ function clearAllData() {
     }
 }
 
-// 计算最佳活动时间
+// 将时间字符串转换为分钟数
+function timeToMinutes(timeStr) {
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    return hours * 60 + minutes;
+}
+
+// 计算最佳活动时间（修复版）
 function calculateBestActivity() {
     const scheduleData = JSON.parse(localStorage.getItem('dailySchedule')) || [];
-    if (scheduleData.length === 0) return;
+    if (scheduleData.length === 0) {
+        document.getElementById('suggestion').innerHTML = '添加人员信息后，系统将自动计算最佳活动时间';
+        return;
+    }
     
     // 统计活动意向
     const activityCounts = {};
@@ -117,44 +126,75 @@ function calculateBestActivity() {
         activityCounts[a] > activityCounts[b] ? a : b
     );
     
-    // 分析共同空闲时间
-    const timeSlots = {};
-    scheduleData.forEach(person => {
-        const [start, end] = person.time.split('-');
-        const startHour = parseInt(start.split(':')[0]);
-        const endHour = parseInt(end.split(':')[0]);
+    // 创建时间段数组（半小时间隔）
+    const timeSlots = [];
+    const startHour = 19 * 60; // 19:00
+    const endHour = 25.5 * 60; // 01:30 (第二天) = 24 + 1.5 = 25.5小时
+    
+    for (let time = startHour; time <= endHour; time += 30) {
+        const slotStart = time % (24 * 60);
+        const slotEnd = (time + 30) % (24 * 60);
         
-        for (let hour = startHour; hour < endHour; hour++) {
-            const slot = `${hour}:00-${hour+1}:00`;
-            timeSlots[slot] = (timeSlots[slot] || 0) + 1;
-        }
+        // 格式化时间为HH:mm
+        const formatTime = minutes => {
+            const h = Math.floor(minutes / 60) % 24;
+            const m = minutes % 60;
+            return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        };
+        
+        timeSlots.push({
+            start: slotStart,
+            end: slotEnd,
+            label: `${formatTime(slotStart)}-${formatTime(slotEnd)}`,
+            count: 0
+        });
+    }
+    
+    // 计算每个时间段的人数
+    timeSlots.forEach(slot => {
+        scheduleData.forEach(person => {
+            const [startStr, endStr] = person.time.split('-');
+            const personStart = timeToMinutes(startStr);
+            let personEnd = timeToMinutes(endStr);
+            
+            // 处理跨天情况（结束时间小于开始时间）
+            if (personEnd < personStart) {
+                personEnd += 24 * 60;
+            }
+            
+            // 检查该时间段是否在人员空闲时间内
+            let slotStart = slot.start;
+            let slotEnd = slot.end;
+            
+            // 处理跨天时间段
+            if (slotEnd < slotStart) {
+                slotEnd += 24 * 60;
+            }
+            
+            if (personStart <= slotStart && personEnd >= slotEnd) {
+                slot.count++;
+            }
+        });
     });
     
     // 找出最多人空闲的时间段
-    let bestTime = '';
-    let maxPeople = 0;
-    for (const [slot, count] of Object.entries(timeSlots)) {
-        if (count > maxPeople) {
-            maxPeople = count;
-            bestTime = slot;
+    let bestSlot = timeSlots[0];
+    timeSlots.forEach(slot => {
+        if (slot.count > bestSlot.count) {
+            bestSlot = slot;
         }
-    }
+    });
     
     // 显示建议
     const suggestionElement = document.getElementById('suggestion');
-    if (bestTime && mostPopularActivity) {
-        const participants = scheduleData.filter(person => {
-            const [start, end] = person.time.split('-');
-            const [bestStart, bestEnd] = bestTime.split('-');
-            return (start <= bestStart && end >= bestEnd);
-        }).length;
-        
+    if (bestSlot.count > 0) {
         suggestionElement.innerHTML = `
             <p><strong>建议活动:</strong> ${mostPopularActivity}</p>
-            <p><strong>最佳时间:</strong> ${bestTime}</p>
-            <p><strong>可参与人数:</strong> ${participants}/${scheduleData.length}</p>
+            <p><strong>最佳时间:</strong> ${bestSlot.label}</p>
+            <p><strong>可参与人数:</strong> ${bestSlot.count}/${scheduleData.length}</p>
             <p class="mt-2 text-sm text-blue-600">* 基于多数人的空闲时间和活动意向计算得出</p>
         `;
+    } else {
+        suggestionElement.textContent = '没有找到合适的共同空闲时间';
     }
 }
-
